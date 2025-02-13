@@ -635,8 +635,7 @@ def check_idle_timeout(idle_timeout, mux, serverproc, daemon):
                     log('Max idle timeout reached')
                 if daemon:
                     os.kill(serverproc.pid, signal.SIGTERM)
-                else:
-                    signal.raise_signal(signal.SIGTERM)
+                signal.raise_signal(signal.SIGTERM)
                 return
             continue
 
