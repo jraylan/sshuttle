@@ -609,7 +609,13 @@ def check_idle_timeout(idle_timeout, mux, serverproc, daemon):
     def _debug2(now, msg):
         if get_verbose_level() < 2:
             return
-        if now - last_debug['val'] >= 1:
+
+        if get_verbose_level() == 2:
+            timeout = 5
+        else:
+            timeout = 1
+
+        if now - last_debug['val'] >= timeout:
             last_debug['val'] = now
             debug2(msg)
 
