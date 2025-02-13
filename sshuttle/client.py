@@ -1,6 +1,7 @@
 import errno
 import re
 import signal
+import threading
 import time
 import subprocess as ssubprocess
 import os
@@ -15,7 +16,7 @@ import sshuttle.ssyslog as ssyslog
 import sshuttle.sdnotify as sdnotify
 from sshuttle.ssnet import SockWrapper, Handler, Proxy, Mux, MuxWrapper
 from sshuttle.helpers import log, debug1, debug2, debug3, Fatal, islocal, \
-    resolvconf_nameservers, which, is_admin_user, RWPair
+    resolvconf_nameservers, which, is_admin_user, RWPair, get_verbose_level
 from sshuttle.methods import get_method, Features
 from sshuttle import __version__
 try:
@@ -588,10 +589,61 @@ def ondns(listener, method, mux, handlers):
     expire_connections(now, mux)
 
 
+def start_idle_timeout_thread(idle_timeout, mux, serverproc, daemon):
+    """Start the check_idle_timeout task if a idle timeout is set"""
+
+    if idle_timeout and idle_timeout > 0:
+        threading.Thread(
+            target=check_idle_timeout,
+            daemon=True,
+            args=(idle_timeout, mux, serverproc, daemon)).start()
+
+
+def check_idle_timeout(idle_timeout, mux, serverproc, daemon):
+    last_idle_check = time.time()
+    debug1('Idle checking thread is running')
+    # hack to bound last_debug var
+    last_debug = dict(val=last_idle_check)
+
+    # debounces debug2
+    def _debug2(now, msg):
+        if get_verbose_level() < 2:
+            return
+        if now - last_debug['val'] >= 1:
+            last_debug['val'] = now
+            debug2(msg)
+
+    while 1:
+        time.sleep(0.01)
+        count = sum(1 for v in mux.channels.values() if v)
+        now = time.time()
+        idle_time = now - last_idle_check
+        timed_out = idle_time > idle_timeout
+
+        if not count:
+            _debug2(now, f'The process is idle for {round(idle_time, 2)}s')
+            if timed_out:
+                if get_verbose_level():
+                    debug1('Max idle timeout reached, raising SIGTERM')
+                else:
+                    log('Max idle timeout reached')
+                if daemon:
+                    os.kill(serverproc.pid, signal.SIGTERM)
+                else:
+                    signal.raise_signal(signal.SIGTERM)
+                return
+            continue
+
+        _debug2(now, f'Idle checking thread found {count} runnig channels')
+
+        last_idle_check = now
+
+
 def _main(tcp_listener, udp_listener, fw, ssh_cmd, remotename,
           python, latency_control, latency_buffer_size,
           dns_listener, seed_hosts, auto_hosts, auto_nets, daemon,
-          to_nameserver, add_cmd_delimiter, remote_shell):
+          to_nameserver, add_cmd_delimiter, remote_shell,
+          idle_timeout=None):
 
     helpers.logprefix = 'c : '
     debug1('Starting client with Python version %s'
@@ -798,6 +850,10 @@ def _main(tcp_listener, udp_listener, fw, ssh_cmd, remotename,
                 raise Fatal('ssh connection to server (pid %d) exited '
                             'with returncode %d' % (serverproc.pid, rv))
 
+    # If --idle-timeout is set, then a thread will spawn and watch
+    # if the process is idle
+    start_idle_timeout_thread(idle_timeout, mux, serverproc, daemon)
+
     while 1:
         check_ssh_alive()
         ssnet.runonce(handlers, mux)
@@ -810,7 +866,8 @@ def main(listenip_v6, listenip_v4,
          latency_buffer_size, dns, nslist,
          method_name, seed_hosts, auto_hosts, auto_nets,
          subnets_include, subnets_exclude, daemon, to_nameserver, pidfile,
-         user, group, sudo_pythonpath, add_cmd_delimiter, remote_shell, tmark):
+         user, group, sudo_pythonpath, add_cmd_delimiter, remote_shell, tmark,
+         idle_timeout=None):
 
     if not remotename:
         raise Fatal("You must use -r/--remote to specify a remote "
@@ -1159,7 +1216,8 @@ def main(listenip_v6, listenip_v4,
         return _main(tcp_listener, udp_listener, fw, ssh_cmd, remotename,
                      python, latency_control, latency_buffer_size,
                      dns_listener, seed_hosts, auto_hosts, auto_nets,
-                     daemon, to_nameserver, add_cmd_delimiter, remote_shell)
+                     daemon, to_nameserver, add_cmd_delimiter, remote_shell,
+                     idle_timeout)
     finally:
         try:
             if daemon:

@@ -146,6 +146,15 @@ def parse_namespace(namespace):
         raise Fatal("%r is not a valid namespace name." % namespace)
 
 
+def parse_idle_timeout(val):
+    try:
+        val = float(val)
+        assert val > 0
+        return val
+    except (ValueError, AssertionError):
+        raise Fatal('%r is not a valid value for a timeout.' % val)
+
+
 class Concat(Action):
     def __init__(self, option_strings, dest, nargs=None, **kwargs):
         if nargs is not None:
@@ -467,6 +476,15 @@ parser.add_argument(
     help="""
     tproxy optional traffic mark with provided MARK value in
     hexadecimal (default '0x01')
+    """
+)
+parser.add_argument(
+    "--idle-timeout",
+    metavar="[IDLE_TIMEOUT]",
+    default=None,
+    type=parse_idle_timeout,
+    help="""
+    auto exits if no connection are alive within the given interval (seconds).
     """
 )
 
